@@ -1,15 +1,44 @@
-import os, time, hmac, hashlib
+import os
+import time
+import hmac
+import hashlib
 import streamlit as st
 
+# -------- App meta --------
 APP_TITLE = "KPIQ Starter Report"
+st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide")
+st.title(APP_TITLE)
 
-# ----- config -----
-ENABLED_PLANS = [p for p in os.getenv("ENABLED_PLANS", "starter").replace(" ", "").split(",") if p]
+# -------- Config / ENV --------
+ENABLED_PLANS = [
+    p for p in os.getenv("ENABLED_PLANS", "starter").replace(" ", "").split(",") if p
+]
 SSO_SECRET = os.getenv("KPIQ_SSO_SECRET", "")
 SHOPIFY_PLANS_URL = os.getenv("SHOPIFY_PLANS_URL", "https://kpiq.info/pages/plans")
 
+# -------- Helpers --------
 def sign(payload: str, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+def _get_query_params() -> dict:
+    """
+    Streamlit 1.31+ -> st.query_params (Mapping proxy)
+    Eski sürümler -> experimental_get_query_params()
+    """
+    try:
+        # Streamlit 1.31+: a dict-like object
+        return dict(st.query_params)  # type: ignore[attr-defined]
+    except Exception:
+        return st.experimental_get_query_params()  # fallback
+
+def _val(x, key):
+    """Param değeri list veya str olabilir -> str olarak döndür."""
+    if x is None:
+        return ""
+    v = x.get(key)
+    if v is None:
+        return ""
+    return v[0] if isinstance(v, list) else v
 
 def validate_sso(q: dict) -> (bool, str):
     """Validate query params coming from backend SSO; return (ok, message)."""
@@ -17,11 +46,11 @@ def validate_sso(q: dict) -> (bool, str):
     if any(k not in q for k in required):
         return False, "Missing SSO parameters."
 
-    email = q["email"][0] if isinstance(q["email"], list) else q["email"]
-    shop = q["shop"][0] if isinstance(q["shop"], list) else q["shop"]
-    plan = q["plan"][0] if isinstance(q["plan"], list) else q["plan"]
-    ts = q["ts"][0] if isinstance(q["ts"], list) else q["ts"]
-    sig = q["sig"][0] if isinstance(q["sig"], list) else q["sig"]
+    email = _val(q, "email")
+    shop = _val(q, "shop")
+    plan = _val(q, "plan")
+    ts = _val(q, "ts")
+    sig = _val(q, "sig")
 
     # time window (10 min)
     try:
@@ -45,16 +74,8 @@ def validate_sso(q: dict) -> (bool, str):
 
     return True, ""
 
-# ----- UI -----
-st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide")
-st.title(APP_TITLE)
-
-# Streamlit 1.31+: st.query_params ; eski sürümler: experimental_get_query_params
-try:
-    qp = st.query_params  # type: ignore[attr-defined]
-except Exception:
-    qp = st.experimental_get_query_params()  # fallback
-
+# -------- Read & validate SSO --------
+qp = _get_query_params()
 ok, msg = validate_sso(qp)
 
 if not ok:
@@ -62,13 +83,22 @@ if not ok:
     st.markdown(f"[Select a plan / Login]({SHOPIFY_PLANS_URL})")
     st.stop()
 
-email = qp.get("email", [""])[0] if isinstance(qp.get("email"), list) else qp.get("email", "")
-plan = qp.get("plan", [""])[0] if isinstance(qp.get("plan"), list) else qp.get("plan", "")
+# Valid ise temel bilgiler
+email = _val(qp, "email")
+plan = _val(qp, "plan")
+
+# İmza ve hassas paramları URL'den temizle (güvenlik + UX)
+try:
+    # Streamlit 1.31+: dict benzeri atama mümkün
+    st.query_params.clear()  # type: ignore[attr-defined]
+except Exception:
+    # Daha eski sürüm için güvenli fallback
+    st.experimental_set_query_params()  # boşalt
 
 st.success(f"Welcome, **{email}** — plan: **{plan}** ✅")
-st.write("This is your Starter KPI Report. (You can now render charts/metrics here.)")
+st.write("This is your Starter KPI Report. (Charts/metrics will appear below.)")
 
-# ---- Example content (replace with your real report) ----
+# -------- Demo content (replace with your real report) --------
 import pandas as pd
 import numpy as np
 import altair as alt
@@ -86,6 +116,7 @@ st.dataframe(df, use_container_width=True)
 
 st.subheader("Conversion rate")
 chart = alt.Chart(df).mark_line(point=True).encode(
-    x="day:T", y="conv_rate:Q"
+    x="day:T",
+    y="conv_rate:Q",
 ).properties(height=300)
 st.altair_chart(chart, use_container_width=True)
